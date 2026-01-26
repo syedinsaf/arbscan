@@ -67,6 +67,55 @@ This makes ARB useful for:
 
 ---
 
+## Interpreting ARB changes (example)
+
+Consider the following real-world example:
+
+* **COS 16.0.2.403**
+
+  ```
+  OEM Metadata Major Version : 3
+  OEM Metadata Minor Version : 0
+  ARB (Anti-Rollback)       : 0
+  ```
+
+* **COS 16.0.3.501**
+
+  ```
+  OEM Metadata Major Version : 3
+  OEM Metadata Minor Version : 0
+  ARB (Anti-Rollback)       : 1
+  ```
+
+This indicates that **COS 16.0.3.501 permanently raised the rollback index**.
+
+### What this means
+
+* The device will **no longer accept bootloader images with ARB < 1**
+* Any attempt to boot or flash components from **16.0.2.403 (ARB 0)** after installing **16.0.3.501 (ARB 1)** will be **rejected by the bootloader**
+* Downgrading firmware **below the raised ARB level is blocked by hardware-backed checks**
+
+### Practical impact
+
+* Flashing or downgrading to firmware with a **lower ARB** will:
+
+  * Fail to boot, or
+  * Be rejected during flashing, or
+  * Leave the device in an **unbootable state** if mixed images are flashed
+
+This is commonly referred to as a *brick*, but technically it is a **rollback enforcement failure**, not physical damage.
+
+### Important clarification
+
+* ARB is **not tied to Android version**
+* ARB increases are **one-way**
+* Once raised, ARB **cannot be lowered**, even with unlocked bootloaders
+
+⚠️ **Rule of thumb:**
+If a newer build increases ARB, **never downgrade bootloader-related images below that level**.
+
+---
+
 ## Usage
 
 ```bash
