@@ -7,6 +7,8 @@
 
 # arbscan
 
+</div>
+
 A small, focused CLI tool to extract **OEM Anti-Rollback (ARB) metadata** from
 Qualcomm bootloader images such as `xbl_config.img`.
 
@@ -164,4 +166,3 @@ Do not use it to violate device security, terms of service, or local laws.
 The author assumes no responsibility for misuse.
 
 ---
-</div>
