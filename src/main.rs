@@ -14,6 +14,7 @@ const ELFDATA2LSB: u8 = 1;
 
 const HASH_HDR_SIZE: usize = 36;
 const HASH_SCAN_MAX: usize = 0x1000;
+const MAX_SEGMENT_SIZE: u64 = 20 * 1024 * 1024; // 20 MB safety cap
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -168,7 +169,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if ph.p_offset + ph.p_filesz > file_size {
             continue;
         }
-        if (ph.p_flags & 0x1) == 0 && ph.p_filesz >= HASH_HDR_SIZE as u64 {
+        if (ph.p_flags & 0x1) == 0
+            && ph.p_filesz >= HASH_HDR_SIZE as u64
+            && ph.p_filesz <= MAX_SEGMENT_SIZE
+        {
             candidates.push((ph.p_offset, ph.p_filesz));
         }
     }
