@@ -41,22 +41,30 @@ struct ArbMetadata {
     hash_size: u64,
 }
 
+// ───────────────── helpers ─────────────────
+
 fn read_le16(buf: &[u8], off: usize) -> u16 {
     u16::from_le_bytes(buf[off..off + 2].try_into().unwrap())
 }
-
 fn read_le32(buf: &[u8], off: usize) -> u32 {
     u32::from_le_bytes(buf[off..off + 4].try_into().unwrap())
 }
-
 fn read_le64(buf: &[u8], off: usize) -> u64 {
     u64::from_le_bytes(buf[off..off + 8].try_into().unwrap())
+}
+
+fn sane_version(v: u32) -> bool {
+    v < 1000
+}
+
+// ARB = 0 is VALID (OOS, OnePlus)
+fn sane_arb(v: u32) -> bool {
+    v < 128
 }
 
 fn ask_yes_no(prompt: &str) -> bool {
     print!("{}", prompt);
     let _ = io::stdout().flush();
-
     let mut input = String::new();
     io::stdin().read_line(&mut input).ok();
     matches!(input.trim().to_lowercase().as_str(), "y" | "yes")
@@ -65,7 +73,6 @@ fn ask_yes_no(prompt: &str) -> bool {
 fn ask_string(prompt: &str) -> String {
     print!("{}", prompt);
     let _ = io::stdout().flush();
-
     let mut input = String::new();
     io::stdin().read_line(&mut input).ok();
     input.trim().to_string()
@@ -74,9 +81,42 @@ fn ask_string(prompt: &str) -> String {
 fn json_filename(input: &str) -> String {
     let p = Path::new(input);
     let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
-
     format!("{}_arb.json", stem)
 }
+
+// ───────────── HASH header detection ─────────────
+
+fn find_hash_header(seg: &[u8]) -> Option<usize> {
+    for off in (0..HASH_SCAN_MAX.min(seg.len())).step_by(4) {
+        if off + HASH_HDR_SIZE > seg.len() {
+            break;
+        }
+
+        let version = read_le32(seg, off);
+        let common_sz = read_le32(seg, off + 4) as usize;
+        let qti_sz = read_le32(seg, off + 8) as usize;
+        let oem_sz = read_le32(seg, off + 12) as usize;
+        let hash_tbl_sz = read_le32(seg, off + 16) as usize;
+
+        if !(1..=10).contains(&version) {
+            continue;
+        }
+        if common_sz > 0x1000 || qti_sz > 0x1000 || oem_sz > 0x4000 {
+            continue;
+        }
+        if hash_tbl_sz == 0 || (hash_tbl_sz & 0x1F) != 0 {
+            continue;
+        }
+        if off + HASH_HDR_SIZE + common_sz + qti_sz + oem_sz > seg.len() {
+            continue;
+        }
+
+        return Some(off);
+    }
+    None
+}
+
+// ─────────────────── main ───────────────────
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = env::args()
@@ -102,11 +142,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let file_size = file.metadata()?.len();
 
-    let mut hash_off = 0u64;
-    let mut hash_size = 0u64;
+    // Collect non-exec segment candidates
+    let mut candidates = Vec::<(u64, u64)>::new();
 
     for i in 0..e_phnum {
-        file.seek(SeekFrom::Start(e_phoff + (i as u64) * (e_phentsz as u64)))?;
+        file.seek(SeekFrom::Start(e_phoff + (i as u64) * e_phentsz as u64))?;
 
         let mut buf = [0u8; size_of::<Elf64Phdr>()];
         file.read_exact(&mut buf)?;
@@ -125,75 +165,64 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if ph.p_filesz == 0 {
             continue;
         }
-
         if ph.p_offset + ph.p_filesz > file_size {
             continue;
         }
-
-        if (ph.p_flags & 0x1) == 0 {
-            hash_off = ph.p_offset;
-            hash_size = ph.p_filesz;
+        if (ph.p_flags & 0x1) == 0 && ph.p_filesz >= HASH_HDR_SIZE as u64 {
+            candidates.push((ph.p_offset, ph.p_filesz));
         }
     }
 
-    if hash_size == 0 {
-        return Err("HASH segment not found".into());
-    }
-
-    let mut seg = vec![0u8; hash_size as usize];
-    file.seek(SeekFrom::Start(hash_off))?;
-    file.read_exact(&mut seg)?;
-
+    // Select the *correct* HASH segment
+    let mut seg = None;
     let mut header_off = None;
+    let mut hash_off = 0u64;
+    let mut hash_size = 0u64;
 
-    for off in (0..HASH_SCAN_MAX.min(seg.len())).step_by(4) {
-        if off + HASH_HDR_SIZE > seg.len() {
+    for (off, size) in candidates {
+        let mut buf = vec![0u8; size as usize];
+        file.seek(SeekFrom::Start(off))?;
+        file.read_exact(&mut buf)?;
+
+        let Some(hdr) = find_hash_header(&buf) else {
+            continue;
+        };
+
+        let oem_md_off = hdr
+            + HASH_HDR_SIZE
+            + read_le32(&buf, hdr + 4) as usize
+            + read_le32(&buf, hdr + 8) as usize;
+
+        if oem_md_off + 12 > buf.len() {
+            continue;
+        }
+
+        let major = read_le32(&buf, oem_md_off);
+        let minor = read_le32(&buf, oem_md_off + 4);
+        let arb = read_le32(&buf, oem_md_off + 8);
+
+        if sane_version(major) && sane_version(minor) && sane_arb(arb) {
+            seg = Some(buf);
+            header_off = Some(hdr);
+            hash_off = off;
+            hash_size = size;
             break;
         }
-
-        let version = read_le32(&seg, off + 0);
-        let common_sz = read_le32(&seg, off + 4) as usize;
-        let qti_sz = read_le32(&seg, off + 8) as usize;
-        let oem_sz = read_le32(&seg, off + 12) as usize;
-        let hash_tbl_sz = read_le32(&seg, off + 16) as usize;
-
-        if !(1..=10).contains(&version) {
-            continue;
-        }
-
-        if common_sz > 0x1000 || qti_sz > 0x1000 || oem_sz > 0x4000 {
-            continue;
-        }
-
-        if hash_tbl_sz == 0 || (hash_tbl_sz & 0x1F) != 0 {
-            continue;
-        }
-
-        if off + HASH_HDR_SIZE + common_sz + qti_sz + oem_sz > seg.len() {
-            continue;
-        }
-
-        header_off = Some(off);
-        break;
     }
 
-    let header_off = header_off.ok_or("Hash table header not found")?;
+    let seg = seg.ok_or("Valid OEM ARB metadata not found")?;
+    let header_off = header_off.unwrap();
 
     let oem_md_off = header_off
         + HASH_HDR_SIZE
         + read_le32(&seg, header_off + 4) as usize
         + read_le32(&seg, header_off + 8) as usize;
 
-    if oem_md_off + 12 > seg.len() {
-        return Err("OEM metadata out of bounds".into());
-    }
-
-    let major = read_le32(&seg, oem_md_off + 0);
+    let major = read_le32(&seg, oem_md_off);
     let minor = read_le32(&seg, oem_md_off + 4);
     let arb = read_le32(&seg, oem_md_off + 8);
 
     println!("[arbscan] Analyzing: {}\n", path);
-
     println!("OEM Metadata");
     println!("────────────");
     println!("  Major Version : {}", major);
@@ -207,7 +236,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let meta = ArbMetadata {
             device_model,
             update_label,
-
             image: path.clone(),
             major,
             minor,
@@ -217,12 +245,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         let out = json_filename(&path);
-        let json = serde_json::to_string_pretty(&meta)?;
-        write(&out, json)?;
-        println!("\n✔ JSON written");
-        println!("  File   : {}", out);
-        println!("  Device : {}", meta.device_model);
-        println!("  Update : {}", meta.update_label);
+        write(&out, serde_json::to_string_pretty(&meta)?)?;
+        println!("\n✔ JSON written: {}", out);
     }
 
     Ok(())
