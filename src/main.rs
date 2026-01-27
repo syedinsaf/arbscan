@@ -42,8 +42,7 @@ struct ArbMetadata {
     hash_size: u64,
 }
 
-// ───────────────── helpers ─────────────────
-
+// helpers
 fn read_le16(buf: &[u8], off: usize) -> u16 {
     u16::from_le_bytes(buf[off..off + 2].try_into().unwrap())
 }
@@ -85,8 +84,7 @@ fn json_filename(input: &str) -> String {
     format!("{}_arb.json", stem)
 }
 
-// ───────────── HASH header detection ─────────────
-
+// HASH header detection
 fn find_hash_header(seg: &[u8]) -> Option<usize> {
     for off in (0..HASH_SCAN_MAX.min(seg.len())).step_by(4) {
         if off + HASH_HDR_SIZE > seg.len() {
@@ -117,8 +115,7 @@ fn find_hash_header(seg: &[u8]) -> Option<usize> {
     None
 }
 
-// ─────────────────── main ───────────────────
-
+// main
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = env::args()
         .nth(1)
@@ -177,7 +174,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Select the *correct* HASH segment
+    // Select the correct HASH segment
     let mut seg = None;
     let mut header_off = None;
     let mut hash_off = 0u64;
