@@ -7,12 +7,12 @@
 
 # arbscan
 
+A small, focused CLI tool to extract **OEM Anti-Rollback (ARB) metadata** from
+Qualcomm bootloader images such as `xbl_config.img`.
+
 [![GitHub release](https://img.shields.io/github/v/release/syedinsaf/arbscan?style=for-the-badge&logo=github&logoColor=white&color=rust)](https://github.com/syedinsaf/arbscan/releases)
 [![Downloads](https://img.shields.io/github/downloads/syedinsaf/arbscan/total?style=for-the-badge&logo=github&logoColor=white&color=rust)](https://github.com/syedinsaf/arbscan/releases)
 [![License](https://img.shields.io/github/license/syedinsaf/arbscan?style=for-the-badge&logo=github&logoColor=white&color=rust)](LICENSE)
-
-A small, focused CLI tool to extract **OEM Anti-Rollback (ARB) metadata** from
-Qualcomm bootloader images such as `xbl_config.img`.
 
 </div>
 
