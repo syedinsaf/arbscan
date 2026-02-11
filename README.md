@@ -7,14 +7,14 @@
 
 # arbscan
 
-</div>
+[![GitHub release](https://img.shields.io/github/v/release/syedinsaf/arbscan?style=for-the-badge&logo=github&logoColor=white&color=rust)](https://github.com/syedinsaf/arbscan/releases)
+[![Downloads](https://img.shields.io/github/downloads/syedinsaf/arbscan/total?style=for-the-badge&logo=github&logoColor=white&color=rust)](https://github.com/syedinsaf/arbscan/releases)
+[![License](https://img.shields.io/github/license/syedinsaf/arbscan?style=for-the-badge&logo=github&logoColor=white&color=rust)](LICENSE)
 
 A small, focused CLI tool to extract **OEM Anti-Rollback (ARB) metadata** from
 Qualcomm bootloader images such as `xbl_config.img`.
 
-Designed for **firmware analysis, research, and archival**.
-This tool is **read-only**: it does not modify images and does not bypass secure
-boot or rollback protection.
+</div>
 
 ---
 
@@ -32,6 +32,11 @@ boot or rollback protection.
 
 Parsing is implemented manually (no heavy ELF crates) to keep the binary small,
 auditable, and predictable.
+
+⚠️ Note:
+arbscan is designed for **firmware analysis, research, and archival**.
+This tool is **read-only**: it does not modify images and does not bypass secure
+boot or rollback protection.
 
 ---
 
