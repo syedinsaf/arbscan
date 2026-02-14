@@ -2,7 +2,13 @@
 name = "arbscan"
 version = "0.1.1"
 edition = "2024"
+description = "Utility for extracting OEM Anti-Rollback (ARB) metadata from Qualcomm bootloader images"
+license = "Apache-2.0"
+repository = "https://github.com/syedinsaf/arbscan"
+readme = "README.md"
 
+keywords = ["android", "qualcomm", "arb", "bootloader"]
+categories = ["command-line-utilities"]
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
