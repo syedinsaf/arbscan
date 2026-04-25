@@ -124,8 +124,12 @@ If a newer build increases ARB, **never downgrade bootloader-related images belo
 ## Usage
 
 ```bash
-arbscan <xbl_config.img>
+arbscan [options] <xbl_config.img>
 ```
+
+**Options:**
+- `-h, --help`  : Print the help menu
+- `--no-json`   : Disable interactive prompt for JSON output
 
 Example:
 
@@ -150,6 +154,7 @@ OEM Metadata
 ## Optional JSON output
 
 After printing the metadata, `arbscan` can optionally write a JSON file.
+If you wish to skip this prompt entirely in scripts, run the tool with the `--no-json` flag.
 
 You will be prompted for:
 
@@ -185,7 +190,7 @@ User-provided fields are **annotations only** and are not derived from firmware.
 
 Requirements:
 
-* Rust 1.70+ (edition 2021)
+* Rust 1.95+ (edition 2024)
 
 Build:
 
