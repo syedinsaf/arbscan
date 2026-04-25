@@ -1,12 +1,11 @@
 use std::env;
-use std::fs::{File, write};
+use std::fmt;
+use std::fs::{write, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::mem::size_of;
 use std::path::Path;
 
 use serde::Serialize;
 
-const ELF_MAGIC: &[u8; 4] = b"\x7fELF";
 const EI_CLASS: usize = 4;
 const EI_DATA: usize = 5;
 const ELFCLASS64: u8 = 2;
@@ -15,19 +14,6 @@ const ELFDATA2LSB: u8 = 1;
 const HASH_HDR_SIZE: usize = 36;
 const HASH_SCAN_MAX: usize = 0x1000;
 const MAX_SEGMENT_SIZE: u64 = 20 * 1024 * 1024; // 20 MB safety cap
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct Elf64Phdr {
-    p_type: u32,
-    p_flags: u32,
-    p_offset: u64,
-    p_vaddr: u64,
-    p_paddr: u64,
-    p_filesz: u64,
-    p_memsz: u64,
-    p_align: u64,
-}
 
 #[derive(Serialize)]
 struct ArbMetadata {
@@ -42,15 +28,52 @@ struct ArbMetadata {
     hash_size: u64,
 }
 
+#[derive(Debug)]
+enum ArbError {
+    Io(io::Error),
+    InvalidElf(&'static str),
+    MissingMetadata(&'static str),
+    Serde(serde_json::Error),
+    Usage(&'static str),
+}
+
+impl fmt::Display for ArbError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ArbError::Io(e) => write!(f, "I/O error: {}", e),
+            ArbError::InvalidElf(msg) => write!(f, "Invalid ELF: {}", msg),
+            ArbError::MissingMetadata(msg) => write!(f, "Metadata error: {}", msg),
+            ArbError::Serde(e) => write!(f, "JSON error: {}", e),
+            ArbError::Usage(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+impl std::error::Error for ArbError {}
+
+impl From<io::Error> for ArbError {
+    fn from(e: io::Error) -> Self {
+        ArbError::Io(e)
+    }
+}
+
+impl From<serde_json::Error> for ArbError {
+    fn from(e: serde_json::Error) -> Self {
+        ArbError::Serde(e)
+    }
+}
+
 // helpers
-fn read_le16(buf: &[u8], off: usize) -> u16 {
-    u16::from_le_bytes(buf[off..off + 2].try_into().unwrap())
+fn read_le16(buf: &[u8], off: usize) -> Option<u16> {
+    buf.get(off..off + 2)?.try_into().ok().map(u16::from_le_bytes)
 }
-fn read_le32(buf: &[u8], off: usize) -> u32 {
-    u32::from_le_bytes(buf[off..off + 4].try_into().unwrap())
+
+fn read_le32(buf: &[u8], off: usize) -> Option<u32> {
+    buf.get(off..off + 4)?.try_into().ok().map(u32::from_le_bytes)
 }
-fn read_le64(buf: &[u8], off: usize) -> u64 {
-    u64::from_le_bytes(buf[off..off + 8].try_into().unwrap())
+
+fn read_le64(buf: &[u8], off: usize) -> Option<u64> {
+    buf.get(off..off + 8)?.try_into().ok().map(u64::from_le_bytes)
 }
 
 fn sane_version(v: u32) -> bool {
@@ -91,11 +114,11 @@ fn find_hash_header(seg: &[u8]) -> Option<usize> {
             break;
         }
 
-        let version = read_le32(seg, off);
-        let common_sz = read_le32(seg, off + 4) as usize;
-        let qti_sz = read_le32(seg, off + 8) as usize;
-        let oem_sz = read_le32(seg, off + 12) as usize;
-        let hash_tbl_sz = read_le32(seg, off + 16) as usize;
+        let version = read_le32(seg, off)?;
+        let common_sz = read_le32(seg, off + 4)? as usize;
+        let qti_sz = read_le32(seg, off + 8)? as usize;
+        let oem_sz = read_le32(seg, off + 12)? as usize;
+        let hash_tbl_sz = read_le32(seg, off + 16)? as usize;
 
         if !(1..=10).contains(&version) {
             continue;
@@ -116,61 +139,84 @@ fn find_hash_header(seg: &[u8]) -> Option<usize> {
 }
 
 // main
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let path = env::args()
-        .nth(1)
-        .ok_or("usage: arbscan <xbl_config.img>")?;
+fn main() {
+    if let Err(e) = run() {
+        eprintln!("{}", e);
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<(), ArbError> {
+    let args: Vec<String> = env::args().skip(1).collect();
+    if args.contains(&"-h".to_string()) || args.contains(&"--help".to_string()) {
+        let title = format!("arbscan v{}", env!("CARGO_PKG_VERSION"));
+        println!("{}", title);
+        println!("{}", "─".repeat(title.len()));
+        println!("Utility for extracting OEM Anti-Rollback (ARB) metadata from Qualcomm bootloader images\n");
+        println!("Usage: arbscan [options] <xbl_config.img>\n");
+        println!("Options:");
+        println!("  -h, --help    Print this help menu");
+        println!("  --no-json     Disable interactive prompt for JSON output");
+        return Ok(());
+    }
+
+    let no_json = args.contains(&"--no-json".to_string());
+
+    let path = args.into_iter().find(|a| !a.starts_with('-'))
+        .ok_or(ArbError::Usage("Error: Missing image path.\n\nUsage: arbscan [options] <xbl_config.img>\nRun 'arbscan -h' for more information."))?;
 
     let mut file = File::open(&path)?;
 
     let mut ehdr = [0u8; 64];
     file.read_exact(&mut ehdr)?;
 
-    if &ehdr[0..4] != ELF_MAGIC || ehdr[EI_CLASS] != ELFCLASS64 || ehdr[EI_DATA] != ELFDATA2LSB {
-        return Err("Not a valid little-endian ELF64 file".into());
+    let valid_magic = matches!(ehdr, [0x7f, b'E', b'L', b'F', ..]);
+    if !valid_magic || ehdr[EI_CLASS] != ELFCLASS64 || ehdr[EI_DATA] != ELFDATA2LSB {
+        return Err(ArbError::InvalidElf("Not a valid little-endian ELF64 file"));
     }
 
-    let e_phoff = read_le64(&ehdr, 0x20);
-    let e_phentsz = read_le16(&ehdr, 0x36) as usize;
-    let e_phnum = read_le16(&ehdr, 0x38) as usize;
+    let e_phoff = read_le64(&ehdr, 0x20).ok_or(ArbError::InvalidElf("Truncated EHDR"))?;
+    let e_phentsz = read_le16(&ehdr, 0x36).unwrap_or(0) as usize;
+    let e_phnum = read_le16(&ehdr, 0x38).unwrap_or(0) as usize;
 
-    if e_phentsz < size_of::<Elf64Phdr>() || e_phnum == 0 {
-        return Err("Unexpected program header layout".into());
+    // Minimum check for an ELF64 Program Header size (usually 56 bytes)
+    if e_phentsz < 56 || e_phnum == 0 {
+        return Err(ArbError::InvalidElf("Unexpected program header layout"));
     }
 
     let file_size = file.metadata()?.len();
+
+    // Read all program headers at once
+    let ph_table_size = e_phnum * e_phentsz;
+    if ph_table_size > 65536 {
+        return Err(ArbError::InvalidElf("Program header table too large"));
+    }
+
+    let mut ph_buf = vec![0u8; ph_table_size];
+    file.seek(SeekFrom::Start(e_phoff))?;
+    file.read_exact(&mut ph_buf)?;
 
     // Collect non-exec segment candidates
     let mut candidates = Vec::<(u64, u64)>::new();
 
     for i in 0..e_phnum {
-        file.seek(SeekFrom::Start(e_phoff + (i as u64) * e_phentsz as u64))?;
+        let off = i * e_phentsz;
+        let Some(buf) = ph_buf.get(off..off + e_phentsz) else { break; };
 
-        let mut buf = [0u8; size_of::<Elf64Phdr>()];
-        file.read_exact(&mut buf)?;
+        let Some(p_flags) = read_le32(buf, 4) else { continue; };
+        let Some(p_offset) = read_le64(buf, 8) else { continue; };
+        let Some(p_filesz) = read_le64(buf, 32) else { continue; };
 
-        let ph = Elf64Phdr {
-            p_type: read_le32(&buf, 0),
-            p_flags: read_le32(&buf, 4),
-            p_offset: read_le64(&buf, 8),
-            p_vaddr: read_le64(&buf, 16),
-            p_paddr: read_le64(&buf, 24),
-            p_filesz: read_le64(&buf, 32),
-            p_memsz: read_le64(&buf, 40),
-            p_align: read_le64(&buf, 48),
-        };
-
-        if ph.p_filesz == 0 {
+        if p_filesz == 0 || p_offset + p_filesz > file_size {
             continue;
         }
-        if ph.p_offset + ph.p_filesz > file_size {
-            continue;
-        }
-        if (ph.p_flags & 0x1) == 0
-            && ph.p_filesz >= HASH_HDR_SIZE as u64
-            && ph.p_filesz <= MAX_SEGMENT_SIZE
+
+        // Must be non-executable, big enough for hash header, under 20MB limit
+        if (p_flags & 0x1) == 0
+            && p_filesz >= HASH_HDR_SIZE as u64
+            && p_filesz <= MAX_SEGMENT_SIZE
         {
-            candidates.push((ph.p_offset, ph.p_filesz));
+            candidates.push((p_offset, p_filesz));
         }
     }
 
@@ -180,30 +226,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut hash_off = 0u64;
     let mut hash_size = 0u64;
 
-    for (off, size) in candidates {
-        let mut buf = vec![0u8; size as usize];
-        file.seek(SeekFrom::Start(off))?;
-        file.read_exact(&mut buf)?;
+    // Reuse buffer to prevent allocating multiple Vecs
+    let mut shared_buf = Vec::new();
 
-        let Some(hdr) = find_hash_header(&buf) else {
+    for (off, size) in candidates {
+        shared_buf.resize(size as usize, 0);
+        file.seek(SeekFrom::Start(off))?;
+        file.read_exact(&mut shared_buf)?;
+
+        let Some(hdr) = find_hash_header(&shared_buf) else {
             continue;
         };
 
-        let oem_md_off = hdr
-            + HASH_HDR_SIZE
-            + read_le32(&buf, hdr + 4) as usize
-            + read_le32(&buf, hdr + 8) as usize;
+        let Some(common_sz) = read_le32(&shared_buf, hdr + 4) else { continue; };
+        let Some(qti_sz) = read_le32(&shared_buf, hdr + 8) else { continue; };
 
-        if oem_md_off + 12 > buf.len() {
+        let oem_md_off = hdr + HASH_HDR_SIZE + common_sz as usize + qti_sz as usize;
+
+        if oem_md_off + 12 > shared_buf.len() {
             continue;
         }
 
-        let major = read_le32(&buf, oem_md_off);
-        let minor = read_le32(&buf, oem_md_off + 4);
-        let arb = read_le32(&buf, oem_md_off + 8);
+        let major = read_le32(&shared_buf, oem_md_off).unwrap_or(0);
+        let minor = read_le32(&shared_buf, oem_md_off + 4).unwrap_or(0);
+        let arb = read_le32(&shared_buf, oem_md_off + 8).unwrap_or(0);
 
         if sane_version(major) && sane_version(minor) && sane_arb(arb) {
-            seg = Some(buf);
+            seg = Some(shared_buf.clone());
             header_off = Some(hdr);
             hash_off = off;
             hash_size = size;
@@ -211,17 +260,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let seg = seg.ok_or("Valid OEM ARB metadata not found")?;
-    let header_off = header_off.unwrap();
+    let seg = seg.ok_or(ArbError::MissingMetadata("Valid OEM ARB metadata not found"))?;
+    let header_off = header_off.unwrap(); // We know this is Some if seg is Some
 
-    let oem_md_off = header_off
-        + HASH_HDR_SIZE
-        + read_le32(&seg, header_off + 4) as usize
-        + read_le32(&seg, header_off + 8) as usize;
+    let common_sz = read_le32(&seg, header_off + 4).unwrap_or(0);
+    let qti_sz = read_le32(&seg, header_off + 8).unwrap_or(0);
+    let oem_md_off = header_off + HASH_HDR_SIZE + common_sz as usize + qti_sz as usize;
 
-    let major = read_le32(&seg, oem_md_off);
-    let minor = read_le32(&seg, oem_md_off + 4);
-    let arb = read_le32(&seg, oem_md_off + 8);
+    let major = read_le32(&seg, oem_md_off).unwrap_or(0);
+    let minor = read_le32(&seg, oem_md_off + 4).unwrap_or(0);
+    let arb = read_le32(&seg, oem_md_off + 8).unwrap_or(0);
 
     println!("[arbscan] Analyzing: {}\n", path);
     println!("OEM Metadata");
@@ -230,7 +278,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Minor Version : {}", minor);
     println!("  ARB Index     : {}", arb);
 
-    if ask_yes_no("\nWrite JSON output? [y/N]: ") {
+    if !no_json && ask_yes_no("\nWrite JSON output? [y/N]: ") {
         let device_model = ask_string("Device model      : ");
         let update_label = ask_string("Update / build    : ");
 
