@@ -1,7 +1,8 @@
 [package]
 name = "arbscan"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
+rust-version = "1.95"
 description = "Utility for extracting OEM Anti-Rollback (ARB) metadata from Qualcomm bootloader images"
 license = "Apache-2.0"
 repository = "https://github.com/syedinsaf/arbscan"
