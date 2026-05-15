@@ -29,7 +29,7 @@ Qualcomm bootloader images such as `xbl_config.img`.
 > ```bash
 > otaripper arb https://example.com/firmware.zip -n
 > ```
-> 👉 **[Get the new otaripper here!](https://github.com/syedinsaf/otaripper)**
+> 👉 **[Get the new otaripper here!](https://github.com/syedinsaf/otaripper/releases)**
 
 
 ## What arbscan does
