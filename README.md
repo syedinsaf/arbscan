@@ -18,6 +18,20 @@ Qualcomm bootloader images such as `xbl_config.img`.
 
 ---
 
+> [!IMPORTANT]
+> **🚀 ARCHIVE NOTICE: `arbscan` has been merged into [otaripper](https://github.com/syedinsaf/otaripper)!**
+> 
+> This standalone repository is no longer actively maintained. All ARB scanning capabilities have been natively integrated and massively upgraded in `otaripper` v3.0+.
+> 
+> By switching to `otaripper`, you gain the power of **Remote ARB Inspection (Zero-Download)**. You can now instantly check the ARB index of a firmware update by simply passing a direct HTTP URL to the OTA zip—`otaripper` will intelligently stream and extract just the tiny `xbl_config.img` over the internet **without you needing to download the massive 3GB+ firmware file!**
+> 
+> **Try it now:**
+> ```bash
+> otaripper arb https://example.com/firmware.zip -n
+> ```
+> 👉 **[Get the new otaripper here!](https://github.com/syedinsaf/otaripper)**
+
+
 ## What arbscan does
 
 `arbscan` parses a Qualcomm bootloader ELF image and extracts:
